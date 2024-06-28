@@ -18,6 +18,9 @@ unsigned long startTime;
 
 void setup() {
   Serial.begin(115200);
+  // udrv_sys_clock_init();
+  // udrv_register_wakeup_callback(&WakeUp);
+  // udrv_sys_clock_on();
   Serial_Canopus.begin(9600, SERIAL_8N1);
   Serial.println("RAK3172 TEST");
   Serial.println("------------------------------------------------------");
@@ -48,29 +51,60 @@ void setup() {
   Serial.printf("Set P2P mode tx power %d: %s\r\n", txPower, api.lora.ptp.set(txPower) ? "Success" : "Fail");              //set TX power
   Serial.printf("Set the low power mode %s\n\r", api.system.lpm.set(1) ? "Success" : "Fail");
   api.lora.registerPRecvCallback(recv_cb);  // goij hàm recv_cb mỗi khi nhận dữ liệu xong
-  api.lora.registerPSendCallback(send_cb);  // gọi hàm send_cb mỗi khi gửi xong
-  while (!join_success) {
+  api.lora.registerPSendCallback(send_cb);
+  // gọi hàm send_cb mỗi khi gửi xong
+    while (!join_success) {
     uint8_t join_data[1] = { 0x01 };       // node dùng cảm biến rời + onewire
     send_frame(0x01, 0x01, join_data, 1);  // gửi frame request join lên gateway
     Serial.println("Join request Sent");
-    //Chờ RX nhận dữ liệu
-    if (join_success) {  // nếu nhận đc phản hồi từ gateway thì thoát vòng while và bắt đầu gửi data
+    // api.lora.precv(5000);
+    delay(6000);
+    if(join_success){
       Serial.println("-----------------------               --------------------");
       Serial.println("----------------------- Join Success --------------------");
       Serial.println("-----------------------               --------------------");
-    } else {
-      Serial.println("Not Responding From GateWay.....");
-      Serial.println("Join Fail");
-      Serial.println("Retrying.........");
+    }else{
+      Serial.println("-----------------------               --------------------");
+      Serial.println("----------------------- !!!! JOIN FAIL !!!! --------------------");
+      Serial.println("-----------------------               --------------------");
     }
-    delay(5000);
+  }
+  Serial.println("Sleeping............");
+  if (api.system.timer.create(RAK_TIMER_0, (RAK_TIMER_HANDLER)WakeUp, RAK_TIMER_PERIODIC) != true) {
+    Serial.printf("Creating timer failed.\r\n");
+  } 
+  else if (api.system.timer.start(RAK_TIMER_0, 60000, (void*)0) != true) {
+    Serial.printf("Starting timer failed.\r\n");
   }
 }
 
 void loop() {
+  api.system.sleep.all();
+  api.system.scheduler.task.destroy();
+}
+/*////////////////////////////////////////////////
+
+                    Funtion                    
+
+///////////////////////////////////////////////////*/
+void WakeUp()
+{   
+    // udrv_sys_clock_on();
+    Serial.println("Hàm Callback ");
+    for(int i=0;i<10;i++){
+      digitalWrite(LED_RECV,!digitalRead(LED_RECV));
+      delay(300);
+    }
+    send_data();
+}
+
+void send_data(){
+  float battery = (api.system.bat.get()/4.2)*100;
+  uint8_t batt_int = battery;
   float temp = read_temperature();           // biến nhiệt độ từ 1W 16bit
   uint16_t temp_scaled = temp * 10;          //123
-  uint8_t temp_data[2];                      // mảng tách giá trị của nhiệt độ từ 1W
+  uint8_t temp_data[2];                   // mảng tách giá trị của nhiệt độ từ 1W
+  Serial.printf("Battery: %d%% ",batt_int);
   Serial.print("scaled temp: ");
   Serial.println(temp_scaled);
   Serial.print("temp: ");
@@ -91,27 +125,14 @@ void loop() {
                      Send Frame
 
   ///////////////////////////////////////////*/
-  // int rxDelay = 5000;// Thời gian nghe của RX
-  // if(millis() - startTime >= 10*1000)// 10s sẽ chuyển sang RX
-  // {
-  //   Serial.printf("P2P Rx start for %d millisSeconds\r\n", rxDelay);
-  //   startTime = millis();
-  //   Serial.printf("P2P set Rx mode %s\r\n",api.lora.precv(rxDelay) ? "Success" : "Fail");
-  //   delay(rxDelay);
-  // }
-  delay(30000);
   send_frame(0x03, 0x02, humi_data, 2);      // gửi frame độ ẩm lên gateway
   delay(2000);                               // Chờ cho gateway nhận dữ liệu
   send_frame(0x03, 0x03, tempmd02_data, 2);  // gửi frame nhiệt độ từ rs485
   delay(2000);                               // Chờ cho gateway nhận dữ liệu
-  send_frame(0x03, 0x04, temp_data, 2);      // gửi frame nhiệt độ từ 1W
-  // delay(30000);
+  send_frame(0x03, 0x04, temp_data, 2);
+  delay(2000);
+  send_frame(0x03, 0x07, &batt_int, 1);
 }
-/*////////////////////////////////////////////////
-
-                    Funtion                    
-
-///////////////////////////////////////////////////*/
 void hexDump(uint8_t *buf, uint16_t len) {
   for (uint16_t i = 0; i < len; i += 16) {  //Duyet qua buffer theo tung nhom 2byte
     char s[len];                            //Mang s: Luu tru ky tu ASCII
@@ -119,7 +140,7 @@ void hexDump(uint8_t *buf, uint16_t len) {
     for (uint8_t j = 0; j < 16; j++) {
       if (i + j < len) {
         uint8_t c = buf[i + j];
-        if (c > 31 && c < 128) {  // mã ascii từ SPACE tới ~
+        if (c > 31 && c < 128) {
           s[iy++] = c;
         } else {
           s[iy++] = '.';
@@ -147,7 +168,7 @@ void recv_cb(rui_lora_p2p_recv_t data) {
   }
   sprintf(buff, "Incoming message, length: %d, RSSI: %d, SNR: %d", data.BufferSize, data.Rssi, data.Snr);
   Serial.println(buff);
-  hexDump(data.Buffer, data.BufferSize);
+  // hexDump(data.Buffer, data.BufferSize);
   digitalWrite(LED_RECV, !digitalRead(LED_RECV));
 }
 void send_cb(void) {
@@ -207,14 +228,4 @@ void send_frame(uint8_t frame_type, uint8_t function, uint8_t *data, uint8_t dat
   }
   Serial.println();
   // Serial.println("Waiting for gateway respone............");
-}
-void sleep_mode(int time) {
-  Serial.print("The timestamp before sleeping: ");
-  Serial.print(millis());
-  Serial.println(" ms");
-  Serial.println("(Wait 10 seconds or Press any key to wakeup)");
-  api.system.sleep.all(time);
-  Serial.print("The timestamp after sleeping: ");
-  Serial.print(millis());
-  Serial.println(" ms");
 }
