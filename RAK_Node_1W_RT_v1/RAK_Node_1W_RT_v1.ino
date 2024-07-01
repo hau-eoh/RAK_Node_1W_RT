@@ -1,3 +1,14 @@
+/*
+Khi bật nguồn led đỏ nháy 20 lần sau đó dừng lại và sáng led đỏ---Đang chờ join vào gateway
+Khi gửi led xanh sẽ sáng( TX Mode)
+Khi nhận led vàng sẽ sáng (RX Mode)
+3 LED tắt--- Sleep 
+
+Sau mỗi lần gửi data xong, RX ở nghe trong khoảng 20s. Nếu kh có dữ liệu gửi về  sẽ vào chế độ ngủ.
+*/
+
+
+
 #include <Rak3172_Canopus.h>
 #include "Canopus_Modbus.h"
 #include "XY_MD02.h"
@@ -14,7 +25,9 @@ bool rx_done = false;
 bool join_success = false;
 bool gateway_ok = false;
 uint8_t len;
-
+uint8_t status_DI = 0x00;
+float battery;
+uint8_t batt_int;
 unsigned long startTime;
 
 void setup() {
@@ -22,7 +35,7 @@ void setup() {
   // udrv_sys_clock_init();
   // udrv_register_wakeup_callback(&WakeUp);
   // udrv_sys_clock_on();
-  Serial_Canopus.begin(9600, SERIAL_8N1);
+  Serial_Canopus.begin(115200, SERIAL_8N1);
   Serial.println("RAK3172 TEST");
   Serial.println("------------------------------------------------------");
   /////////////////////// Delay For Detect baudrate- DO NOT DELETE ////////
@@ -52,30 +65,36 @@ void setup() {
   Serial.printf("Set P2P mode code rate 4/%d: %s\r\n", (cr + 5), api.lora.pcr.set(cr) ? "Success" : "Fail");               //set code  rate
   Serial.printf("Set P2P mode preamble length %d: %s\r\n", preamble, api.lora.ppl.set(preamble) ? "Success" : "Fail");     //set preamble length
   Serial.printf("Set P2P mode tx power %d: %s\r\n", txPower, api.lora.ptp.set(txPower) ? "Success" : "Fail");              //set TX power
-  Serial.printf("Set the low power mode %s\n\r", api.system.lpm.set(1) ? "Success" : "Fail");
-  api.lora.registerPRecvCallback(recv_cb);  // goij hàm recv_cb mỗi khi nhận dữ liệu xong
-  api.lora.registerPSendCallback(send_cb);// gọi hàm send_cb mỗi khi gửi xong
+  Serial.printf("Set the low power mode %s\n\r", api.system.lpm.set(1) ? "Success" : "Fail");                              //set Low Power mode
+  api.lora.registerPRecvCallback(recv_cb);  // gọi hàm recv_cb mỗi khi vào mode RX
+  api.lora.registerPSendCallback(send_cb);// gọi hàm send_cb mỗi khi gửi xong
   for(int i=0;i<20;i++){
     digitalWrite(LED_SYNC,!digitalRead(LED_SYNC));
     delay(50);
   }
   digitalWrite(LED_SYNC,1);
-  // while (!join_success) {
-  //   uint8_t join_data[1] = { 0x01 };       // node dùng cảm biến rời + onewire
-  //   send_frame(0x01, 0x01, join_data, 1);  // gửi frame request join lên gateway
-  //   Serial.println("Join request Sent");
-  //   // api.lora.precv(5000);
-  //   delay(6000);
-  //   if(join_success){
-  //     Serial.println("-----------------------               --------------------");
-  //     Serial.println("----------------------- Join Success --------------------");
-  //     Serial.println("-----------------------               --------------------");
-  //   }else{
-  //     Serial.println("-----------------------               --------------------");
-  //     Serial.println("------------------- !!! JOIN FAIL !!!! -------------------");
-  //     Serial.println("-----------------------               --------------------");
-  //   }
-  // }
+  while (!join_success) {
+    uint8_t join_data[1] = { 0x01 };       // node dùng cảm biến rời + onewire
+    send_frame(0x01, 0x01, join_data, 1);  // gửi frame request join lên gateway
+    Serial.println("Join request Sent");
+    // api.lora.precv(5000);
+    delay(6000);
+    if(join_success){
+      Serial.println("-----------------------               --------------------");
+      Serial.println("----------------------- Join Success --------------------");
+      Serial.println("-----------------------               --------------------");
+      digitalWrite(LED_SYNC,0);
+      battery = (api.system.bat.get()/4.2)*100;
+      batt_int = battery;
+      send_frame(0x03, 0x07, &batt_int, 1);
+      delay(2000);
+      sensor_frame();//gửi data sensor lần đầu
+    }else{
+      Serial.println("-----------------------               --------------------");
+      Serial.println("------------------- !!! JOIN FAIL !!!! -------------------");
+      Serial.println("-----------------------               --------------------");
+    }
+  }
   if (api.system.timer.create(RAK_TIMER_0, (RAK_TIMER_HANDLER)WakeUp, RAK_TIMER_PERIODIC) != true) {
     Serial.printf("Creating timer failed.\r\n");
   } 
@@ -97,41 +116,37 @@ void WakeUp()
     Serial.println("Hàm Callback ");
     count++;
     if(count==1440){// 24h sẽ gửi pin
-      float battery = (api.system.bat.get()/4.2)*100;
-      uint8_t batt_int = battery;
+      battery = (api.system.bat.get()/4.2)*100;
+      batt_int = battery;
       Serial.printf("Battery: %d%% ",batt_int);
       send_frame(0x03, 0x07, &batt_int, 1);
       delay(2000);
       count=0;
     }
-    send_data();
+    sensor_frame();
 }
 void ButtonHandle(){
-  if(digitalRead(button_pin)==LOW){
-    long pre=0;
-    if(millis()-pre>=200){
+  long pre=0;
+  if(millis()-pre>=500){
       pre=millis();
       if(digitalRead(button_pin)==LOW){
         Serial.println("_______________________________  External Interrupt!!!_________________________________________");
-        uint8_t status = 0;
-        status=!status;
-        // for(int i=0;i<10;i++){
-        //   digitalWrite(LED_SYNC,!digitalRead(LED_SYNC));
-        //   delay(300);
-        // }
-          uint8_t adam_data[4];
-          adam_data[0] = status;
-          adam_data[1] = 0;
-          adam_data[2] = 0;
-          adam_data[3] = 0;
-          send_frame(0x03, 0x05, adam_data, 4);
+        // send_frame(0x03, 0x06, &status_led, 1);
+        uint8_t adam_data[4];
+        adam_data[0] = 0;
+        adam_data[1] = 1;
+        adam_data[2] = 0;
+        adam_data[3] = 0;
+        send_frame(0x03, 0x05, adam_data, 4);
+        delay(10000);
+        adam_data[1] = 0;
+        send_frame(0x03, 0x05, adam_data, 4);
       }else{
-      return;
+        return;
       }
-    }
   }
 }
-void send_data(){
+void sensor_frame(){// 1W-RT
   float temp = read_temperature();           // biến nhiệt độ từ 1W 16bit
   uint16_t temp_scaled = temp * 10;          //123
   uint8_t temp_data[2];                   // mảng tách giá trị của nhiệt độ từ 1W
@@ -155,57 +170,72 @@ void send_data(){
 
   ///////////////////////////////////////////*/
   send_frame(0x03, 0x02, humi_data, 2);      // gửi frame độ ẩm lên gateway
-  delay(2000);                               // Chờ cho gateway nhận dữ liệu
+  delay(2000);                             
   send_frame(0x03, 0x03, tempmd02_data, 2);  // gửi frame nhiệt độ từ rs485
-  delay(2000);                               // Chờ cho gateway nhận dữ liệu
-  send_frame(0x03, 0x04, temp_data, 2);
+  delay(2000);                             
+  send_frame(0x03, 0x04, temp_data, 2);      // gửi frame nhiệt độ từ 1W
 }
-void hexDump(uint8_t *buf, uint16_t len) {
-  for (uint16_t i = 0; i < len; i += 16) {  //Duyet qua buffer theo tung nhom 2byte
-    char s[len];                            //Mang s: Luu tru ky tu ASCII
-    uint8_t iy = 0;
-    for (uint8_t j = 0; j < 16; j++) {
-      if (i + j < len) {
-        uint8_t c = buf[i + j];
-        if (c > 31 && c < 128) {
-          s[iy++] = c;
-        } else {
-          s[iy++] = '.';
+void hexDump(uint8_t *buf, uint16_t len)
+{
+    char alphabet[17] = "0123456789ABCDEF";
+    for (uint16_t i = 0; i < len; i += 16)
+    {
+        if (i % 128 == 0)
+            Serial.print(F("   +------------------------------------------------+ +----------------+\r\n"));
+        char s[] = "|                                                | |                |\r\n";
+        uint8_t ix = 1, iy = 52;
+        for (uint8_t j = 0; j < 16; j++)
+        {
+              if (i + j < len)
+              {
+                  uint8_t c = buf[i + j];
+                  s[ix++] = alphabet[(c >> 4) & 0x0F];
+                  s[ix++] = alphabet[c & 0x0F];
+                  ix++;
+          }
+          uint8_t index = i / 16;
+          if (i < 256)
+              Serial.write(' ');
+          Serial.print(index, HEX);
+          Serial.write('x');
+          Serial.print(s);
+          Serial.print(F("   +------------------------------------------------+ +----------------+\r\n"));
         }
-      }
     }
-    String msg = String(s);
-    Serial.println(msg);
-  }
-  Serial.println("Buffer!");
+    Serial.print(F("   +------------------------------------------------+ +----------------+\r\n"));
 }
 void recv_cb(rui_lora_p2p_recv_t data) {
   rx_done = true;
+  char buff[92];
+  uint8_t respone = data.Buffer[10];
+  Serial.println(respone,HEX);
+  if (respone == 0x00 || 0x01 && data.Buffer[4]==0x01 && data.Buffer[5]==0x02 && data.Buffer[6]==0x03 && data.Buffer[7]==0x04 && data.Buffer[8]==0x06 && data.Buffer[9]==0x06 ) {
+    join_success = true;
+  } else{
+    join_success = false;
+  }
+  if(data.Buffer[2]==0x01 && data.Buffer[3]==0x06 && data.Buffer[4]==0x01 && data.Buffer[5]==0x02 && data.Buffer[6]==0x03 && data.Buffer[7]==0x04 && data.Buffer[8]==0x06 && data.Buffer[9]==0x06 ){
+    if(data.Buffer[10]==0x01){
+        digitalWrite(LED_SYNC,1);
+        Serial.println(data.Buffer[10]);
+    }else if(data.Buffer[10]==0x00){
+      Serial.println(data.Buffer[10]);
+      digitalWrite(LED_SYNC,0);
+    }
+  }
   if(data.Status==1){
     digitalWrite(LED_RECV,0);
     Serial.println("________________ Recv Nothing ____________");
     digitalWrite(LED_RECV,0);
-    sleep_mode();
     return;
   }
-  // else if(data.BufferSize == 0) {
-  //   Serial.println("Empty buffer.");
-  // }
-  char buff[92];
-  uint8_t respone = buff[5];
-  if (respone == 0x00 || 0x01) {
-    join_success = true;
-  } else {
-    join_success = false;
-  }
   sprintf(buff, "Incoming message, length: %d, RSSI: %d, SNR: %d", data.BufferSize, data.Rssi, data.Snr);
-  Serial.println(buff);
   digitalWrite(LED_RECV,0);
   // hexDump(data.Buffer, data.BufferSize);
   // sleep_mode();
 }
 void send_cb(void) {
-  digitalWrite(LED_RECV,1);
+  digitalWrite(LED_RECV,1); 
   digitalWrite(LED_SEND,0);
   Serial.printf("P2P Set RX Mode: %s\r\n", api.lora.precv(20000) ? "Success" : "Fail");  // bật mode RX 20s
 }
@@ -232,7 +262,7 @@ void send_frame(uint8_t frame_type, uint8_t function, uint8_t *data, uint8_t dat
   frame[len++] = frame_type;            // FRAME TYPE
   frame[len++] = function;              // FUNCTION
   memcpy(&frame[len], MAC, 6);          // MAC
-  len += 6;                             //Mac address 6 bytes : cộng dồn
+  len += 6;                             //Mac address 6 bytes 
   memcpy(&frame[len], data, data_len);  // DATA
   len += data_len;
 
@@ -268,9 +298,8 @@ void send_frame(uint8_t frame_type, uint8_t function, uint8_t *data, uint8_t dat
 void sleep_mode(){
   Serial.println("________________  Sleeping ____________________-");
   digitalWrite(LED_SYNC,0);
-  if(!digitalRead(LED_SYNC)){
-    digitalWrite(LED_SYNC,0);
-  }
+  digitalWrite(LED_SEND,0);
+  digitalWrite(LED_RECV,0);
   api.system.sleep.all();
   api.system.scheduler.task.destroy();
-}-
+}
